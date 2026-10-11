@@ -510,7 +510,7 @@ function Hero({ records }) {
   return (
     <section className="rounded-[2rem] p-6 md:p-8 bg-gradient-to-br from-peach-100 via-rose-50 to-sky-50 shadow-soft border border-white relative overflow-hidden">
       <div className="absolute -right-6 -top-8 text-[9rem] opacity-20 select-none" aria-hidden="true">🍼</div>
-      <p className="text-sm font-semibold text-peach-500">{BABY.mom} · {BABY.dad}의 아들</p>
+      <p className="text-sm font-semibold text-peach-500">{BABY.dad} · {BABY.mom}의 아들</p>
       <h1 className="font-display text-4xl md:text-5xl text-ink mt-1">{BABY.name}</h1>
       <p className="mt-3 text-lg text-ink">
         {days >= 0 ? <>태어난 지 <b className="text-peach-500 text-2xl">{days + 1}</b>일째</> : <>만나기까지 <b className="text-peach-500 text-2xl">{-days}</b>일</>}
