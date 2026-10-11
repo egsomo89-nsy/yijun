@@ -1,0 +1,25 @@
+rules_version = '2';
+
+// 유이준 디지털 앨범 — Storage 보안 규칙
+// Firebase 콘솔 > Storage > 규칙 탭에 붙여넣고 [게시] 하세요.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function profilePath() { return /databases/(default)/documents/users/$(request.auth.uid); }
+    function approved() {
+      return request.auth != null
+        && firestore.exists(profilePath())
+        && firestore.get(profilePath()).data.status == 'approved';
+    }
+
+    // 사진 · 영상: records/{올린 사람 uid}/{파일명}
+    match /records/{uid}/{fileName} {
+      allow read: if approved();
+      allow create: if approved() && request.auth.uid == uid
+        && request.resource.size < 300 * 1024 * 1024
+        && (request.resource.contentType.matches('image/.*') || request.resource.contentType.matches('video/.*'));
+      allow delete: if approved()
+        && (request.auth.uid == uid || firestore.get(profilePath()).data.role == 'admin');
+    }
+  }
+}

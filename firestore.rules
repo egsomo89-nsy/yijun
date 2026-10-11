@@ -1,0 +1,48 @@
+rules_version = '2';
+
+// 유이준 디지털 앨범 — Firestore 보안 규칙
+// Firebase 콘솔 > Firestore Database > 규칙 탭에 붙여넣고 [게시] 하세요.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function myPath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function me() { return get(myPath()).data; }
+    // 관리자가 승인한 가족인지
+    function approved() { return signedIn() && exists(myPath()) && me().status == 'approved'; }
+    function admin() { return approved() && me().role == 'admin'; }
+    function canWrite() { return approved() && (me().role == 'admin' || me().permission == 'edit'); }
+
+    // 앨범의 첫 관리자 정보. 한 번 만들어지면 수정 · 삭제할 수 없습니다.
+    match /meta/app {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.adminUid == request.auth.uid;
+    }
+
+    // 가족 프로필
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || approved());
+      // 가입: 누구나 '승인 대기' 상태로만 가입 가능. 관리자 프로필은 meta/app 에 등록된 본인만.
+      allow create: if signedIn() && request.auth.uid == uid && (
+        (request.resource.data.status == 'pending'
+          && request.resource.data.role == 'family'
+          && request.resource.data.permission == 'view')
+        || (request.resource.data.role == 'admin'
+          && getAfter(/databases/$(database)/documents/meta/app).data.adminUid == uid)
+      );
+      // 승인 · 관계 등록 · 권한 변경은 관리자만. 본인은 요청 메모 정도만 수정 가능.
+      allow update: if admin() || (
+        signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['requestNote', 'displayName', 'photoURL'])
+      );
+      allow delete: if admin();
+    }
+
+    // 성장 기록
+    match /records/{recordId} {
+      allow read: if approved();
+      allow create: if canWrite() && request.resource.data.authorUid == request.auth.uid;
+      allow update, delete: if admin() || (canWrite() && resource.data.authorUid == request.auth.uid);
+    }
+  }
+}
