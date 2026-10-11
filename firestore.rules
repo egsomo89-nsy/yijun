@@ -19,6 +19,12 @@ service cloud.firestore {
       allow create: if signedIn() && request.resource.data.adminUid == request.auth.uid;
     }
 
+    // 이준이 프로필 사진: 승인된 가족이 보고, 관리자만 바꿉니다.
+    match /meta/baby {
+      allow read: if approved();
+      allow write: if admin();
+    }
+
     // 가족 프로필
     match /users/{uid} {
       allow read: if signedIn() && (request.auth.uid == uid || approved());

@@ -126,6 +126,11 @@ const watchUser = (uid, cb, onError) =>
 const watchUsers = (cb, onError) =>
   onSnapshot(usersCol, (snap) => cb(snap.docs.map((d) => d.data())), onError);
 
+/** 이준이 프로필 사진(meta/baby) 실시간 구독 · 변경(관리자만) */
+const watchBaby = (cb, onError) =>
+  onSnapshot(doc(db, "meta", "baby"), (snap) => cb(snap.exists() ? snap.data() : null), onError);
+const setBabyPhoto = (data) => setDoc(doc(db, "meta", "baby"), data, { merge: true });
+
 const updateUser = (uid, data) => updateDoc(doc(db, "users", uid), data);
 const removeUser = (uid) => deleteDoc(doc(db, "users", uid));
 
@@ -178,7 +183,7 @@ async function deleteMedia(paths) {
 window.AlbumFirebase = {
   mode: "firebase",
   signInGoogle, signOut, watchAuth, ensureUserProfile,
-  watchUser, watchUsers, updateUser, removeUser,
+  watchUser, watchUsers, updateUser, removeUser, watchBaby, setBabyPhoto,
   watchRecords, addRecord, updateRecord, deleteRecord,
   uploadMedia, deleteMedia,
 };

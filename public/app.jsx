@@ -190,6 +190,26 @@ function resizeToDataURL(file, maxSize, quality) {
   });
 }
 
+/** 프로필 사진용: 가운데를 정사각형으로 잘라 JPEG 파일로 변환 */
+function cropSquare(file, size) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const src = URL.createObjectURL(file);
+    img.onload = () => {
+      const side = Math.min(img.width, img.height);
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = Math.min(size, side);
+      canvas.getContext('2d').drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(src);
+      canvas.toBlob((blob) => (blob
+        ? resolve(new File([blob], 'baby-profile.jpg', { type: 'image/jpeg' }))
+        : reject(new Error('이미지를 변환할 수 없어요.'))), 'image/jpeg', 0.9);
+    };
+    img.onerror = () => { URL.revokeObjectURL(src); reject(new Error('이미지를 읽을 수 없어요.')); };
+    img.src = src;
+  });
+}
+
 const birthRecord = (author) => ({
   date: BABY.birth, title: `${BABY.nick}이가 태어났어요`, category: 'milestone', milestone: 'birth',
   tags: ['탄생', '가족'], media: [], visibility: 'all',
@@ -239,6 +259,8 @@ const demoBackend = {
   mode: 'demo',
   watchRecords: (cb) => DemoStore.subscribe((s) => cb(s.records)),
   watchUsers: (cb) => DemoStore.subscribe((s) => cb(s.users)),
+  watchBaby: (cb) => DemoStore.subscribe((s) => cb(s.baby || null)),
+  setBabyPhoto: async (data) => DemoStore.patch('baby', (b) => ({ ...b, ...data })),
   addRecord: async (data) => DemoStore.patch('records', (list) => [{ ...data, id: `r${Date.now()}` }, ...list]),
   updateRecord: async (id, data) => DemoStore.patch('records', (list) => list.map((r) => (r.id === id ? { ...r, ...data } : r))),
   deleteRecord: async (rec) => DemoStore.patch('records', (list) => list.filter((r) => r.id !== rec.id)),
@@ -310,6 +332,23 @@ function Avatar({ user, size = 'w-11 h-11' }) {
   );
 }
 
+/** 이준이 프로필 사진. 사진이 없으면 기본 아이콘, 관리자는 눌러서 바로 바꿀 수 있음 */
+function BabyAvatar({ baby, onPick, size = 'w-11 h-11', rounded = 'rounded-2xl' }) {
+  const input = useRef(null);
+  const img = (
+    <img src={(baby && baby.photoURL) || 'icons/icon-192.png'} alt={`${BABY.name} 프로필 사진`}
+      className={cx(size, rounded, 'object-cover shadow-card bg-peach-50 shrink-0')} />
+  );
+  if (!onPick) return img;
+  return (
+    <button type="button" className="relative shrink-0" onClick={() => input.current.click()} title="프로필 사진 바꾸기" aria-label={`${BABY.nick}이 프로필 사진 바꾸기`}>
+      {img}
+      <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-white shadow flex items-center justify-center text-[10px]" aria-hidden="true">📷</span>
+      <input ref={input} type="file" accept="image/*" hidden onChange={(e) => { onPick(e.target.files[0]); e.target.value = ''; }} />
+    </button>
+  );
+}
+
 function SectionTitle({ children, right }) {
   return (
     <div className="flex items-end justify-between gap-3 mb-3">
@@ -377,9 +416,11 @@ function RecordCard({ record, onOpen }) {
 
 /** 상세 보기 모달: PC 는 사진 + 옆 정보 패널, 모바일은 위아래 배치. ← → 키로 넘기기 */
 function Lightbox({ list, start, viewer, onClose, onEdit, onDelete }) {
+  // 선택한 기록 하나의 사진 · 영상만 넘겨 봅니다 (다른 기록으로는 넘어가지 않음)
   const slides = useMemo(
-    () => list.flatMap((r) => ((r.media || []).length ? r.media.map((m, i) => ({ r, m, i })) : [{ r, m: null, i: 0 }])),
-    [list]
+    () => list.filter((r) => r.id === start.id)
+      .flatMap((r) => ((r.media || []).length ? r.media.map((m, i) => ({ r, m, i })) : [{ r, m: null, i: 0 }])),
+    [list, start.id]
   );
   const [cur, setCur] = useState(start);
   const pos = Math.max(0, slides.findIndex((s) => s.r.id === cur.id && s.i === cur.idx));
@@ -413,7 +454,7 @@ function Lightbox({ list, start, viewer, onClose, onEdit, onDelete }) {
           <button className={cx(navBtn, 'left-3')} onClick={() => go(-1)} disabled={pos === 0} aria-label="이전"><Icon name="left" /></button>
           <button className={cx(navBtn, 'right-3')} onClick={() => go(1)} disabled={pos === slides.length - 1} aria-label="다음"><Icon name="right" /></button>
           <button className="absolute top-3 right-3 md:hidden w-10 h-10 rounded-full bg-black/40 text-white flex items-center justify-center" onClick={onClose} aria-label="닫기"><Icon name="x" /></button>
-          <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/45 text-white text-xs px-3 py-1">{pos + 1} / {slides.length}</span>
+          {slides.length > 1 && <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/45 text-white text-xs px-3 py-1">{pos + 1} / {slides.length}</span>}
         </div>
         <div className="md:w-[380px] shrink-0 flex flex-col min-h-0 flex-1 md:flex-none">
           <div className="flex-1 overflow-y-auto p-5 md:p-6">
@@ -1065,7 +1106,7 @@ function FamilyView({ users, records, me, backend, viewAs, setViewAs, toast }) {
   );
 }
 
-function SettingsView({ me, mode, users, records, onLogout, toast }) {
+function SettingsView({ me, mode, users, records, baby, onPickBaby, onClearBaby, onLogout, toast }) {
   const [installable, setInstallable] = useState(!!window.__installPrompt);
   useEffect(() => {
     const on = () => setInstallable(true);
@@ -1104,6 +1145,17 @@ function SettingsView({ me, mode, users, records, onLogout, toast }) {
           <p className="mt-1 text-xs text-peach-500 font-semibold">{isAdmin(me) ? '👑 관리자' : me.permission === 'edit' ? '✏️ 기록 작성 가능' : '👀 보기 전용'} · {groupOf(me.group).label}</p>
         </div>
       </div>
+
+      {onPickBaby && (
+        <div className={cx(CARD, 'p-5 flex items-center gap-4')}>
+          <BabyAvatar baby={baby} onPick={onPickBaby} size="w-16 h-16" />
+          <div className="min-w-0">
+            <p className="font-semibold text-ink">{BABY.nick}이 프로필 사진</p>
+            <p className="mt-1 text-sm text-stone-400">사진을 누르면 바꿀 수 있어요. 화면 왼쪽 위 아이콘에 표시돼요.</p>
+            {baby && baby.photoURL && <button className="mt-2 text-sm font-semibold text-peach-500" onClick={onClearBaby}>기본 아이콘으로 되돌리기</button>}
+          </div>
+        </div>
+      )}
 
       <div className={cx(CARD, 'p-5')}>
         <p className="font-semibold text-ink">📱 앱으로 설치</p>
@@ -1255,6 +1307,7 @@ function App() {
   const [auth, setAuth] = useState({ status: 'loading', me: null, error: '' });
   const [records, setRecords] = useState([]);
   const [users, setUsers] = useState([]);
+  const [baby, setBaby] = useState(null);          // 이준이 프로필 사진 { photoURL, photoPath }
   const [tab, setTab] = usePersistentState('tab', 'home');
   const [draft, setDraft] = useState(null);        // 기록 폼 초기값(수정할 기록 또는 미리 채울 값)
   const [formKey, setFormKey] = useState(0);
@@ -1300,16 +1353,21 @@ function App() {
 
   // ── 승인된 가족만 기록 · 가족 목록을 실시간 구독
   useEffect(() => {
-    if (!approved) { setRecords([]); setUsers([]); return undefined; }
+    if (!approved) { setRecords([]); setUsers([]); setBaby(null); return undefined; }
     // 새로고침 직후에는 LocalStorage 에 보관해 둔 마지막 기록을 먼저 보여 줌
-    if (mode === 'firebase') setRecords(LS.get(`cache:records:${me.uid}`, []));
+    if (mode === 'firebase') { setRecords(LS.get(`cache:records:${me.uid}`, [])); setBaby(LS.get('cache:baby', null)); }
     const onErr = (e) => toast(errMsg(e));
     const un1 = backend.watchRecords((list) => {
       setRecords(list);
       if (mode === 'firebase') LS.set(`cache:records:${me.uid}`, list);
     }, onErr);
     const un2 = backend.watchUsers(setUsers, onErr);
-    return () => { un1(); un2(); };
+    // (브라우저에 예전 firebase.js 가 남아 있어도 앱이 멈추지 않도록 함수 유무를 확인)
+    const un3 = backend.watchBaby ? backend.watchBaby((b) => {
+      setBaby(b);
+      if (mode === 'firebase') LS.set('cache:baby', b);
+    }, () => {}) : () => {};
+    return () => { un1(); un2(); un3(); };
   }, [approved, mode, me && me.uid]);
 
   const loginGoogle = async () => {
@@ -1320,7 +1378,29 @@ function App() {
     setLightbox(null); setDraft(null); setTab('home');
     if (mode === 'demo') { setMode('firebase'); return; }
     if (me) LS.del(`cache:records:${me.uid}`);
+    LS.del('cache:baby');
     FB.signOut();
+  };
+
+  // ── 이준이 프로필 사진 바꾸기 (관리자)
+  const changeBabyPhoto = async (file) => {
+    if (!file) return;
+    try {
+      toast('프로필 사진을 올리는 중…');
+      const uploaded = await backend.uploadMedia(await cropSquare(file, 512), me.uid);
+      const oldPath = baby && baby.photoPath;
+      await backend.setBabyPhoto({ photoURL: uploaded.url, photoPath: uploaded.path || '', updatedAt: Date.now() });
+      if (oldPath) backend.deleteMedia([oldPath]);
+      toast('프로필 사진을 바꿨어요.');
+    } catch (e) { toast(errMsg(e)); }
+  };
+  const clearBabyPhoto = async () => {
+    try {
+      const oldPath = baby && baby.photoPath;
+      await backend.setBabyPhoto({ photoURL: '', photoPath: '', updatedAt: Date.now() });
+      if (oldPath) backend.deleteMedia([oldPath]);
+      toast('기본 아이콘으로 되돌렸어요.');
+    } catch (e) { toast(errMsg(e)); }
   };
 
   // 미리보기 중이면 그 가족의 시점으로 기록을 걸러서 보여 줌
@@ -1351,6 +1431,7 @@ function App() {
   const navItems = NAV.filter((n) => n.id !== 'add' || writable);
   const pendingCount = isAdmin(me) ? users.filter((u) => u.status === 'pending').length : 0;
   const current = tab === 'add' && !writable ? 'home' : tab;
+  const pickBaby = isAdmin(me) && !previewing ? changeBabyPhoto : null;
   const lightboxList = lightbox ? lightbox.list.map((r) => visible.find((v) => v.id === r.id)).filter(Boolean) : [];
 
   return (
@@ -1358,7 +1439,7 @@ function App() {
       {/* PC: 사이드바 */}
       <aside className="hidden md:flex md:flex-col w-64 shrink-0 h-screen sticky top-0 p-5 border-r border-white bg-white/60 backdrop-blur">
         <div className="flex items-center gap-3 px-2">
-          <img src="icons/icon-192.png" alt="" className="w-11 h-11 rounded-2xl shadow-card" />
+          <BabyAvatar baby={baby} onPick={pickBaby} />
           <div>
             <p className="font-display text-lg text-ink leading-tight">{BABY.name}</p>
             <p className="text-xs text-stone-400">디지털 앨범</p>
@@ -1387,7 +1468,7 @@ function App() {
       <div className="flex-1 min-w-0">
         {/* 모바일: 상단 바 */}
         <header className="md:hidden sticky top-0 z-30 bg-cream/85 backdrop-blur px-4 py-3 flex items-center gap-2.5 border-b border-white">
-          <img src="icons/icon-192.png" alt="" className="w-8 h-8 rounded-xl" />
+          <BabyAvatar baby={baby} onPick={pickBaby} size="w-9 h-9" rounded="rounded-xl" />
           <p className="font-display text-lg text-ink">{BABY.name} 앨범</p>
           {mode === 'demo' && <span className="ml-auto text-xs rounded-full bg-sky-50 text-sky-600 px-2.5 py-1 font-semibold">체험 모드</span>}
         </header>
@@ -1406,7 +1487,7 @@ function App() {
           {current === 'add' && <RecordForm key={formKey} initial={draft} me={me} backend={backend} allTags={allTags} toast={toast}
             onDone={() => go('home')} onCancel={() => go('home')} />}
           {current === 'family' && <FamilyView users={users} records={records} me={me} backend={backend} viewAs={viewAs} setViewAs={setViewAs} toast={toast} />}
-          {current === 'me' && <SettingsView me={me} mode={mode} users={users} records={visible} onLogout={logout} toast={toast} />}
+          {current === 'me' && <SettingsView me={me} mode={mode} users={users} records={visible} baby={baby} onPickBaby={pickBaby} onClearBaby={clearBabyPhoto} onLogout={logout} toast={toast} />}
         </main>
 
         {/* 모바일: 하단 내비게이션 */}
