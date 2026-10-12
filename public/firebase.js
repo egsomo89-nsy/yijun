@@ -79,6 +79,8 @@ async function signInGoogle() {
 
 const signOut = () => fbSignOut(auth);
 const watchAuth = (cb) => onAuthStateChanged(auth, cb);
+/** 서버 함수(/api/autofill)에 본인 확인용으로 보내는 로그인 토큰 */
+const getIdToken = () => (auth.currentUser ? auth.currentUser.getIdToken() : Promise.resolve(""));
 
 /**
  * 로그인 직후 호출: users/{uid} 프로필 문서가 없으면 만듭니다.
@@ -182,7 +184,7 @@ async function deleteMedia(paths) {
 // ─────────────────────────────────────────────────────────────────────────────
 window.AlbumFirebase = {
   mode: "firebase",
-  signInGoogle, signOut, watchAuth, ensureUserProfile,
+  signInGoogle, signOut, watchAuth, getIdToken, ensureUserProfile,
   watchUser, watchUsers, updateUser, removeUser, watchBaby, setBabyPhoto,
   watchRecords, addRecord, updateRecord, deleteRecord,
   uploadMedia, deleteMedia,

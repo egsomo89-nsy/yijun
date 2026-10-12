@@ -190,6 +190,35 @@ function resizeToDataURL(file, maxSize, quality) {
   });
 }
 
+/** 자동 채우기용: 영상 파일에서 장면 몇 컷을 뽑아 JPEG dataURL 로 변환 (실패하면 빈 배열) */
+function videoFrames(file, count, maxSize) {
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    const src = URL.createObjectURL(file);
+    const frames = [];
+    let step = 0;
+    const finish = () => { clearTimeout(timer); URL.revokeObjectURL(src); resolve(frames); };
+    const timer = setTimeout(finish, 12000);
+    const seek = () => { video.currentTime = (video.duration * (step + 1)) / (count + 1); };
+    video.muted = true; video.playsInline = true; video.preload = 'auto';
+    video.onloadedmetadata = () => { if (Number.isFinite(video.duration) && video.duration > 0) seek(); else finish(); };
+    video.onseeked = () => {
+      const scale = Math.min(1, maxSize / Math.max(video.videoWidth, video.videoHeight));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(video.videoWidth * scale);
+      canvas.height = Math.round(video.videoHeight * scale);
+      if (canvas.width && canvas.height) {
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        frames.push(canvas.toDataURL('image/jpeg', 0.8));
+      }
+      step += 1;
+      if (step < count) seek(); else finish();
+    };
+    video.onerror = finish;
+    video.src = src;
+  });
+}
+
 /** 프로필 사진용: 가운데를 정사각형으로 잘라 JPEG 파일로 변환 */
 function cropSquare(file, size) {
   return new Promise((resolve, reject) => {
@@ -290,6 +319,7 @@ const ICONS = {
   download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5M12 15V3" /></>,
   check: <path d="M20 6 9 17l-5-5" />,
   eye: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></>,
+  sparkle: <><path d="m11 3 1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9Z" /><path d="M19 15v5M16.5 17.500h5" /></>,
   image: <><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" /></>,
 };
 function Icon({ name, className = 'w-5 h-5' }) {
@@ -669,6 +699,59 @@ function RecordForm({ initial, me, backend, allTags, onDone, onCancel, toast }) 
   useEffect(() => { if (!editing && initial && initial.milestone) pickMilestone(initial.milestone); }, []);
   useEffect(() => () => files.forEach((f) => URL.revokeObjectURL(f.preview)), []);
 
+  // ✨ 자동 채우기: 사진(영상은 장면 몇 컷)을 서버 함수 /api/autofill 로 보내 제목 · 메모 초안을 받음
+  const [filling, setFilling] = useState('');   // '' | 'title' | 'memo'
+  const autofill = async (target) => {
+    if (backend.mode !== 'firebase' || !backend.getIdToken) { toast('자동 채우기는 구글 계정으로 로그인한 가족 앨범에서만 쓸 수 있어요.'); return; }
+    if (!files.length && !media.length) { toast('먼저 사진이나 영상을 추가해 주세요.'); return; }
+    setFilling(target);
+    try {
+      const MAX = 4;
+      const shots = [];
+      for (const f of files) {
+        if (shots.length >= MAX) break;
+        if (f.type === 'image') shots.push(await resizeToDataURL(f.file, 1024, 0.8));
+        else shots.push(...(await videoFrames(f.file, 3, 768)).slice(0, MAX - shots.length));
+      }
+      const images = shots.map((dataUrl) => ({ mimeType: 'image/jpeg', data: dataUrl.split(',')[1] }));
+      // 이미 저장된 사진은 주소만 보내고 서버가 내려받음
+      const urls = media.filter((m) => m.type !== 'video' && m.url.startsWith('https://firebasestorage.googleapis.com/')).map((m) => m.url).slice(0, MAX - images.length);
+      if (!images.length && !urls.length) { toast('자동 채우기에 쓸 수 있는 사진을 찾지 못했어요. 사진 파일을 추가해 주세요.'); return; }
+
+      const milestoneInfo = MILESTONES.find((m) => m.id === milestone);
+      const res = await fetch('/api/autofill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await backend.getIdToken()}` },
+        body: JSON.stringify({
+          images, urls,
+          context: {
+            date, age: ageLabel(date), category: catOf(category).label, milestone: milestoneInfo ? milestoneInfo.label : '', tags,
+            // 채우려는 칸이 아닌 쪽에 이미 적은 내용은 참고 자료로 보냄
+            title: target === 'memo' ? title.trim() : '', memo: target === 'title' ? memo.trim() : '',
+          },
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!data) throw new Error('자동 채우기 서버에 연결할 수 없어요. 배포된 사이트에서 다시 시도해 주세요.');
+      if (!res.ok) throw new Error(data.error || '자동 채우기에 실패했어요.');
+      if (target === 'title' && data.title) setTitle(data.title);
+      if (target === 'memo' && data.memo) setMemo(data.memo);
+    } catch (err) {
+      toast(err.message || '자동 채우기에 실패했어요.');
+    } finally {
+      setFilling('');
+    }
+  };
+  const fillBtn = (target, position) => (
+    <button type="button" onClick={() => autofill(target)} disabled={!!filling || !!busy}
+      title="사진을 보고 자동으로 채우기" aria-label={`사진을 보고 ${target === 'title' ? '제목' : '메모'} 자동으로 채우기`}
+      className={cx('absolute right-2 w-9 h-9 rounded-full flex items-center justify-center text-peach-400 hover:bg-peach-50 hover:text-peach-500 transition disabled:opacity-40', position)}>
+      {filling === target
+        ? <span className="w-4 h-4 rounded-full border-2 border-peach-200 border-t-peach-500 animate-spin" />
+        : <Icon name="sparkle" className="w-5 h-5" />}
+    </button>
+  );
+
   const toggleTag = (t) => setTags(tags.includes(t) ? tags.filter((x) => x !== t) : [...tags, t]);
   const addTag = () => {
     const t = newTag.replace(/[#\s]/g, '');
@@ -767,10 +850,13 @@ function RecordForm({ initial, me, backend, allTags, onDone, onCancel, toast }) 
           </label>
         </div>
 
-        <label className="block">
-          <span className={LABEL}>제목</span>
-          <input className={INPUT} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예: 처음으로 방긋 웃은 날" maxLength={60} />
-        </label>
+        <div>
+          <label className={LABEL} htmlFor="record-title">제목</label>
+          <div className="relative">
+            <input id="record-title" className={cx(INPUT, 'pr-12')} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예: 처음으로 방긋 웃은 날" maxLength={60} />
+            {fillBtn('title', 'top-1/2 -translate-y-1/2')}
+          </div>
+        </div>
 
         <div>
           <span className={LABEL}>카테고리</span>
@@ -791,10 +877,14 @@ function RecordForm({ initial, me, backend, allTags, onDone, onCancel, toast }) 
           </div>
         </div>
 
-        <label className="block">
-          <span className={LABEL}>오늘의 메모</span>
-          <textarea className={cx(INPUT, 'min-h-[9rem] leading-7')} value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="오늘 이준이는 어땠나요?" />
-        </label>
+        <div>
+          <label className={LABEL} htmlFor="record-memo">오늘의 메모</label>
+          <div className="relative">
+            <textarea id="record-memo" className={cx(INPUT, 'min-h-[9rem] leading-7 pr-12')} value={memo} onChange={(e) => setMemo(e.target.value)} placeholder="오늘 이준이는 어땠나요?" />
+            {fillBtn('memo', 'top-2')}
+          </div>
+          <p className="mt-1.5 text-xs text-stone-400">✨ 를 누르면 올린 사진을 보고 제목 · 메모 초안을 써 줘요. 사진은 AI 서비스(Google Gemini)로 전송돼요.</p>
+        </div>
 
         <div>
           <span className={LABEL}>공개 범위</span>

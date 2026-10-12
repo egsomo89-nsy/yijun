@@ -2,7 +2,7 @@
  * 앱 화면 파일과 CDN 라이브러리를 캐시해 설치형 웹앱(PWA)으로 동작하게 하고,
  * 인터넷이 끊겨도 앱이 열리도록 합니다. (Firebase 데이터 통신은 건드리지 않음)
  * 앱 파일을 수정해 배포할 때는 VERSION 값을 올려 주세요. */
-const VERSION = 'v4';
+const VERSION = 'v5';
 const CACHE = `yijun-album-${VERSION}`;
 
 const APP_SHELL = [

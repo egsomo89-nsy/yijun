@@ -14,6 +14,7 @@
 | `public/app.jsx` | 화면 전체(타임라인, 기록 폼, 검색, 가족 공유, 로그인). |
 | `public/firebase.js` | Firebase 초기화와 로그인 · Firestore · Storage 함수. `firebaseConfig` 가 여기 있습니다. |
 | `public/sw.js`, `manifest.webmanifest`, `icons/` | 앱 설치와 오프라인 실행을 위한 PWA 파일. |
+| `api/autofill.js` | ✨ 자동 채우기 서버 함수. 사진을 Gemini 에 보내 제목 · 메모 초안을 받습니다. |
 | `vercel.json` | Vercel 배포 설정. 빌드 없이 `public/` 폴더를 그대로 올립니다. |
 | `firestore.rules`, `storage.rules` | Firebase 보안 규칙. **콘솔에 직접 게시해야 합니다.** |
 | `firebase.json`, `.firebaserc` | (선택) Firebase CLI 로 규칙을 게시할 때만 사용합니다. |
@@ -66,7 +67,20 @@ GitHub 에서 빈 저장소를 만든 뒤, 안내되는 `git remote add origin �
 
 이후에는 GitHub 에 push 할 때마다 Vercel 이 자동으로 다시 배포합니다.
 
-## 5. 가족 초대
+## 5. ✨ 자동 채우기 설정 (선택)
+
+기록 폼의 제목 · 메모 입력란 오른쪽 ✨ 버튼은 올린 사진을 보고 초안을 써 줍니다. Google Gemini API 를 쓰며, 키를 등록해야 동작합니다.
+
+1. [Google AI Studio](https://aistudio.google.com/apikey) 에서 API 키를 만듭니다.
+2. Vercel → 프로젝트 → **Settings → Environment Variables** 에서 이름 `GEMINI_API_KEY`, 값에 그 키를 넣고 저장합니다.
+3. **Deployments** 에서 최신 배포를 **Redeploy** 합니다. (환경 변수는 다시 배포해야 적용됩니다.)
+
+- 키는 서버 함수 `api/autofill.js` 안에서만 쓰이고 화면 코드나 GitHub 에는 들어가지 않습니다. **키를 코드에 직접 적지 마세요.**
+- 기록 작성 권한이 있는 승인된 가족만 쓸 수 있고, 누를 때마다 사진(최대 4장, 영상은 장면 3컷)이 Gemini 로 전송됩니다.
+- 모델을 바꾸려면 환경 변수 `GEMINI_MODEL` 에 모델 이름을 넣습니다.
+- 내 PC 에서 `python -m http.server` 로 실행할 때는 서버 함수가 없어서 동작하지 않습니다.
+
+## 6. 가족 초대
 
 1. 가족에게 Vercel 주소를 보냅니다.
 2. 가족이 구글 계정으로 로그인하면 “승인 대기” 상태가 됩니다.
