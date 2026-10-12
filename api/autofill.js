@@ -11,7 +11,7 @@
 
 const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || 'yijun-3757c';
 // 모델 이름은 환경 변수 GEMINI_MODEL 로 바꿀 수 있습니다.
-const MODELS = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean);
+const MODELS = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-flash-lite-latest'].filter(Boolean);
 
 const MAX_IMAGES = 4;
 const MAX_URL_BYTES = 8 * 1024 * 1024;
@@ -103,20 +103,30 @@ async function askGemini(apiKey, prompt, images) {
     },
   };
 
+  const call = (model) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(body),
+  });
+
   let lastStatus = 0;
+  let lastReason = '';
   for (const model of MODELS) {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify(body),
-    });
+    let res = await call(model);
+    // 모델이 잠깐 바쁜 경우(5xx)에는 한 번 더 시도
+    if (res.status >= 500) { await new Promise((r) => setTimeout(r, 1500)); res = await call(model); }
     if (res.status === 404) { lastStatus = 404; continue; } // 없는 모델 이름이면 다음 후보로
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
-      console.error('Gemini error', res.status, JSON.stringify(json).slice(0, 500));
+      lastStatus = res.status;
+      lastReason = String((json.error && (json.error.status || json.error.message)) || '').slice(0, 80);
+      console.error('Gemini error', model, res.status, JSON.stringify(json).slice(0, 500));
+      if (res.status >= 500) continue; // 계속 바쁘면 다음 후보 모델로
       if (res.status === 429) throw new HttpError(429, 'AI 사용량 한도에 도달했어요. 잠시 후 다시 시도해 주세요.');
-      if (res.status === 400 || res.status === 403) throw new HttpError(502, 'Gemini API 키가 올바른지 확인해 주세요.');
-      throw new HttpError(502, 'AI 서비스가 응답하지 않아요. 잠시 후 다시 시도해 주세요.');
+      if (res.status === 400 || res.status === 401 || res.status === 403) {
+        throw new HttpError(502, `Gemini 가 요청을 거부했어요. API 키가 올바른지 확인해 주세요. (${res.status} ${lastReason})`);
+      }
+      throw new HttpError(502, `AI 서비스 오류예요. (${res.status} ${lastReason})`);
     }
     const candidate = (json.candidates || [])[0] || {};
     const text = ((candidate.content || {}).parts || []).map((p) => p.text || '').join('');
@@ -128,7 +138,8 @@ async function askGemini(apiKey, prompt, images) {
       throw new HttpError(502, 'AI 가 글을 만들지 못했어요. 다른 사진으로 다시 시도해 주세요.');
     }
   }
-  console.error('Gemini model not found', MODELS.join(','), lastStatus);
+  console.error('Gemini failed on all models', MODELS.join(','), lastStatus, lastReason);
+  if (lastStatus >= 500) throw new HttpError(502, `AI 서비스가 지금 바빠서 응답하지 못했어요. 잠시 후 다시 시도해 주세요. (${lastStatus} ${lastReason})`);
   throw new HttpError(502, '사용할 수 있는 Gemini 모델을 찾지 못했어요. 환경 변수 GEMINI_MODEL 을 확인해 주세요.');
 }
 
