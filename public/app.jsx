@@ -412,12 +412,13 @@ function MediaThumb({ record, media, className }) {
 }
 
 /** 기록 카드 */
-function RecordCard({ record, onOpen }) {
+function RecordCard({ record, onOpen, highlight }) {
   const cat = catOf(record.category);
   const media = record.media || [];
   const vis = visOf(record.visibility);
   return (
-    <article className={cx(CARD, 'overflow-hidden fade-up cursor-pointer hover:shadow-soft transition')} onClick={() => onOpen(record, 0)}>
+    <article data-record-date={record.date} onClick={() => onOpen(record, 0)}
+      className={cx(CARD, 'overflow-hidden fade-up cursor-pointer hover:shadow-soft transition', highlight && 'ring-4 ring-rose-300')}>
       <div className="relative">
         <MediaThumb record={record} media={media[0]} className="w-full aspect-[4/3]" />
         {media.length > 1 && (
@@ -568,6 +569,58 @@ function Hero({ records }) {
   );
 }
 
+/** 달력: 기록이 있는 날에 빨간 점. 날짜를 누르면 타임라인의 그날 기록으로 이동 */
+function RecordCalendar({ records, onPick }) {
+  const today = todayYMD();
+  const [ym, setYm] = useState(today.slice(0, 7));   // 보고 있는 달 'YYYY-MM'
+  const counts = useMemo(() => {
+    const map = {};
+    records.forEach((r) => { map[r.date] = (map[r.date] || 0) + 1; });
+    return map;
+  }, [records]);
+
+  const [y, m] = ym.split('-').map(Number);
+  const firstDay = new Date(y, m - 1, 1).getDay();
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const cells = [...Array(firstDay).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => `${y}-${pad(m)}-${pad(i + 1)}`)];
+  const move = (step) => { const d = new Date(y, m - 1 + step, 1); setYm(`${d.getFullYear()}-${pad(d.getMonth() + 1)}`); };
+  const recordDays = cells.filter((c) => c && counts[c]).length;
+  const navBtn = 'w-9 h-9 rounded-full flex items-center justify-center text-stone-400 hover:bg-peach-50 hover:text-peach-500';
+
+  return (
+    <section className={cx(CARD, 'p-4 md:p-5')} aria-label="기록 달력">
+      <div className="flex items-center gap-1">
+        <h2 className="font-display text-lg text-ink">{y}년 {m}월</h2>
+        <span className="ml-2 text-xs text-stone-400">기록한 날 {recordDays}일</span>
+        {ym !== today.slice(0, 7) && <button className="ml-auto text-xs font-semibold text-peach-500 px-2" onClick={() => setYm(today.slice(0, 7))}>오늘</button>}
+        <button className={cx(navBtn, ym === today.slice(0, 7) && 'ml-auto')} onClick={() => move(-1)} aria-label="이전 달"><Icon name="left" /></button>
+        <button className={navBtn} onClick={() => move(1)} aria-label="다음 달"><Icon name="right" /></button>
+      </div>
+      <div className="mt-2 grid grid-cols-7 text-center text-xs text-stone-400">
+        {[...'일월화수목금토'].map((d, i) => <span key={d} className={cx('py-1', i === 0 && 'text-rose-400', i === 6 && 'text-sky-500')}>{d}</span>)}
+      </div>
+      <div className="grid grid-cols-7 gap-y-1">
+        {cells.map((date, i) => {
+          if (!date) return <span key={`blank-${i}`} />;
+          const count = counts[date] || 0;
+          const day = Number(date.slice(8));
+          return (
+            <button key={date} type="button" disabled={!count} onClick={() => onPick(date)}
+              aria-label={`${fmtDate(date)}${count ? ` 기록 ${count}개` : ''}`}
+              className={cx('mx-auto w-10 h-11 rounded-xl flex flex-col items-center justify-center gap-0.5 text-sm transition',
+                count ? 'font-semibold text-ink hover:bg-peach-50 active:scale-95' : 'text-stone-300',
+                date === today && 'ring-2 ring-peach-300',
+                date === BABY.birth && 'bg-amber-50')}>
+              {day}
+              <span className={cx('w-1.5 h-1.5 rounded-full', count ? 'bg-rose-500' : 'bg-transparent')} />
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 /** 마일스톤 보드: 달성한 것은 색으로, 아직인 것은 눌러서 바로 기록 */
 function MilestoneBoard({ records, writable, onOpen, onAdd }) {
   return (
@@ -623,9 +676,23 @@ function TimelineView({ records, viewer, onOpen, onAdd }) {
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const stageInfo = STAGES.find((s) => s.id === stage);
 
+  // 달력에서 날짜를 누르면: 월령 필터를 풀고 그날의 기록 카드로 스크롤 + 잠깐 강조
+  const [focus, setFocus] = useState(null);   // { date }
+  const jumpTo = (date) => { setStage('all'); setFocus({ date }); };
+  useEffect(() => {
+    if (!focus) return undefined;
+    const el = document.querySelector(`[data-record-date="${focus.date}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const timer = setTimeout(() => setFocus(null), 2600);
+    return () => clearTimeout(timer);
+  }, [focus]);
+
   return (
     <div className="space-y-8">
-      <Hero records={records} />
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
+        <Hero records={records} />
+        <RecordCalendar records={records} onPick={jumpTo} />
+      </div>
       <MilestoneBoard records={records} writable={writable} onOpen={(r, i) => onOpen(r, i, records)} onAdd={onAdd} />
 
       <section>
@@ -658,7 +725,7 @@ function TimelineView({ records, viewer, onOpen, onAdd }) {
                     <span className="text-sm text-stone-400">{period[0] === period[1] ? period[0] : `${period[0]} ~ ${period[1]}`} · {g.items.length}개</span>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {g.items.map((r) => <RecordCard key={r.id} record={r} onOpen={(rec, i) => onOpen(rec, i, flat)} />)}
+                    {g.items.map((r) => <RecordCard key={r.id} record={r} highlight={!!focus && focus.date === r.date} onOpen={(rec, i) => onOpen(rec, i, flat)} />)}
                   </div>
                 </div>
               );
