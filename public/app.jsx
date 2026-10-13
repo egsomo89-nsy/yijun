@@ -790,15 +790,25 @@ function RecordForm({ initial, me, backend, allTags, onDone, onCancel, toast }) 
       const shots = [];
       for (const f of files) {
         if (shots.length >= MAX) break;
-        if (f.type === 'image') shots.push(await resizeToDataURL(f.file, 1024, 0.8));
+        if (f.type === 'image') shots.push(await resizeToDataURL(f.file, 896, 0.75));
         else shots.push(...(await videoFrames(f.file, 3, 768)).slice(0, MAX - shots.length));
       }
-      const images = shots.map((dataUrl) => ({ mimeType: 'image/jpeg', data: dataUrl.split(',')[1] }));
+      // 서버 함수가 받을 수 있는 요청 크기(4.5MB)를 넘지 않도록 합계 3MB 까지만 보냄
+      const images = [];
+      let total = 0;
+      for (const dataUrl of shots) {
+        const data = dataUrl.split(',')[1];
+        if (total + data.length > 3 * 1024 * 1024) break;
+        total += data.length;
+        images.push({ mimeType: 'image/jpeg', data });
+      }
       // 이미 저장된 사진은 주소만 보내고 서버가 내려받음
       const urls = media.filter((m) => m.type !== 'video' && m.url.startsWith('https://firebasestorage.googleapis.com/')).map((m) => m.url).slice(0, MAX - images.length);
       if (!images.length && !urls.length) { toast('자동 채우기에 쓸 수 있는 사진을 찾지 못했어요. 사진 파일을 추가해 주세요.'); return; }
 
       const milestoneInfo = MILESTONES.find((m) => m.id === milestone);
+      const local = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+      const localMsg = '자동 채우기는 내 PC(localhost)에서는 동작하지 않아요. 배포된 사이트에서 사용해 주세요.';
       const res = await fetch('/api/autofill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await backend.getIdToken()}` },
@@ -810,9 +820,15 @@ function RecordForm({ initial, me, backend, allTags, onDone, onCancel, toast }) 
             title: target === 'memo' ? title.trim() : '', memo: target === 'title' ? memo.trim() : '',
           },
         }),
-      });
+      }).catch(() => { throw new Error(local ? localMsg : '서버에 연결할 수 없어요. 인터넷 연결을 확인하고 다시 시도해 주세요.'); });
       const data = await res.json().catch(() => null);
-      if (!data) throw new Error('자동 채우기 서버에 연결할 수 없어요. 배포된 사이트에서 다시 시도해 주세요.');
+      if (!data) {
+        // 서버 함수가 안내 문구(JSON)를 돌려주지 못한 경우: 원인을 구분해서 알려 줌
+        if (local) throw new Error(localMsg);
+        if (res.status === 413) throw new Error('보내는 사진 용량이 너무 커요. 사진 수를 줄여서 다시 시도해 주세요. (413)');
+        if (res.status === 504) throw new Error('AI 응답이 너무 오래 걸려서 끊겼어요. 잠시 후 다시 시도해 주세요. (504)');
+        throw new Error(`자동 채우기 서버가 응답하지 않아요. 잠시 후 다시 시도해 주세요. (${res.status})`);
+      }
       if (!res.ok) throw new Error(data.error || '자동 채우기에 실패했어요.');
       if (target === 'title' && data.title) setTitle(data.title);
       if (target === 'memo' && data.memo) setMemo(data.memo);

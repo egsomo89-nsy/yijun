@@ -103,18 +103,30 @@ async function askGemini(apiKey, prompt, images) {
     },
   };
 
-  const call = (model) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-    body: JSON.stringify(body),
-  });
+  // Vercel 함수 제한 시간(60초)을 넘기면 안내 문구 없이 끊기므로, 그 전에 스스로 멈춥니다.
+  const deadline = Date.now() + 50000;
+  const call = async (model) => {
+    const left = deadline - Date.now();
+    if (left < 3000) return { status: 504, ok: false, json: async () => ({ error: { status: 'TIMEOUT' } }) };
+    try {
+      return await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(Math.min(25000, left)),
+      });
+    } catch (e) {
+      // 응답이 너무 늦거나 연결이 끊긴 경우 → 바쁜 것(5xx)과 같게 처리
+      return { status: 504, ok: false, json: async () => ({ error: { status: 'TIMEOUT' } }) };
+    }
+  };
 
   let lastStatus = 0;
   let lastReason = '';
   for (const model of MODELS) {
     let res = await call(model);
-    // 모델이 잠깐 바쁜 경우(5xx)에는 한 번 더 시도
-    if (res.status >= 500) { await new Promise((r) => setTimeout(r, 1500)); res = await call(model); }
+    // 모델이 잠깐 바쁜 경우(5xx)에는 한 번 더 시도 (시간 초과는 바로 다음 모델로)
+    if (res.status >= 500 && res.status !== 504) { await new Promise((r) => setTimeout(r, 1500)); res = await call(model); }
     if (res.status === 404) { lastStatus = 404; continue; } // 없는 모델 이름이면 다음 후보로
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -139,6 +151,7 @@ async function askGemini(apiKey, prompt, images) {
     }
   }
   console.error('Gemini failed on all models', MODELS.join(','), lastStatus, lastReason);
+  if (lastStatus === 504) throw new HttpError(504, 'AI 응답이 너무 오래 걸려서 멈췄어요. 잠시 후 다시 시도해 주세요. (504 TIMEOUT)');
   if (lastStatus >= 500) throw new HttpError(502, `AI 서비스가 지금 바빠서 응답하지 못했어요. 잠시 후 다시 시도해 주세요. (${lastStatus} ${lastReason})`);
   throw new HttpError(502, '사용할 수 있는 Gemini 모델을 찾지 못했어요. 환경 변수 GEMINI_MODEL 을 확인해 주세요.');
 }
