@@ -311,6 +311,7 @@ const ICONS = {
   users: <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></>,
   user: <><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>,
   x: <path d="M18 6 6 18M6 6l12 12" />,
+  expand: <path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />,
   left: <path d="m15 18-6-6 6-6" />,
   right: <path d="m9 18 6-6-6-6" />,
   edit: <><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" /></>,
@@ -445,7 +446,8 @@ function RecordCard({ record, onOpen, highlight }) {
   );
 }
 
-/** 상세 보기 모달: PC 는 사진 + 옆 정보 패널, 모바일은 위아래 배치. ← → 키로 넘기기 */
+/** 상세 보기 모달: PC 는 사진 + 옆 정보 패널, 모바일은 위아래 배치. ← → 키로 넘기기.
+ *  사진을 누르면 정보 패널 없이 사진만 화면 가득 보고, 다시 누르거나 Esc 로 돌아옵니다. */
 function Lightbox({ list, start, viewer, onClose, onEdit, onDelete }) {
   // 선택한 기록 하나의 사진 · 영상만 넘겨 봅니다 (다른 기록으로는 넘어가지 않음)
   const slides = useMemo(
@@ -457,10 +459,11 @@ function Lightbox({ list, start, viewer, onClose, onEdit, onDelete }) {
   const pos = Math.max(0, slides.findIndex((s) => s.r.id === cur.id && s.i === cur.idx));
   const slide = slides[pos];
   const go = (step) => { const next = slides[pos + step]; if (next) setCur({ id: next.r.id, idx: next.i }); };
+  const [full, setFull] = useState(false);   // 사진만 전체 화면으로 보기
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') { if (full) setFull(false); else onClose(); }
       if (e.key === 'ArrowLeft') go(-1);
       if (e.key === 'ArrowRight') go(1);
     };
@@ -476,18 +479,28 @@ function Lightbox({ list, start, viewer, onClose, onEdit, onDelete }) {
   const milestone = MILESTONES.find((x) => x.id === r.milestone);
   const navBtn = 'absolute top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/85 text-ink flex items-center justify-center shadow-card hover:bg-white disabled:opacity-0';
   return (
-    <div className="fixed inset-0 z-50 bg-stone-900/80 backdrop-blur-sm flex items-stretch md:items-center justify-center md:p-8" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="bg-white w-full md:max-w-6xl md:h-[86vh] md:rounded-3xl overflow-hidden flex flex-col md:flex-row shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="relative bg-stone-900 flex items-center justify-center h-[46vh] md:h-auto md:flex-1 shrink-0">
+    <div className={cx('fixed inset-0 z-50 flex items-stretch justify-center', full ? 'bg-black' : 'bg-stone-900/80 backdrop-blur-sm md:items-center md:p-8')} onClick={onClose} role="dialog" aria-modal="true">
+      <div className={cx('w-full overflow-hidden flex', full ? 'bg-black' : 'bg-white md:max-w-6xl md:h-[86vh] md:rounded-3xl flex-col md:flex-row shadow-2xl')} onClick={(e) => e.stopPropagation()}>
+        <div className={cx('relative flex items-center justify-center', full ? 'bg-black flex-1 min-w-0' : 'bg-stone-900 h-[46vh] md:h-auto md:flex-1 shrink-0')}>
           {!m && <MediaThumb record={r} media={null} className="w-full h-full" />}
           {m && m.type === 'video' && <video key={m.url} src={m.url} controls playsInline className="max-w-full max-h-full" />}
-          {m && m.type !== 'video' && <img src={m.url} alt={r.title || '사진'} className="max-w-full max-h-full object-contain" />}
+          {m && m.type !== 'video' && (
+            <img src={m.url} alt={r.title || '사진'} onClick={() => setFull(!full)} title={full ? '원래 화면으로' : '사진만 크게 보기'}
+              className={cx('object-contain', full ? 'w-full h-full cursor-zoom-out' : 'max-w-full max-h-full cursor-zoom-in')} />
+          )}
           <button className={cx(navBtn, 'left-3')} onClick={() => go(-1)} disabled={pos === 0} aria-label="이전"><Icon name="left" /></button>
           <button className={cx(navBtn, 'right-3')} onClick={() => go(1)} disabled={pos === slides.length - 1} aria-label="다음"><Icon name="right" /></button>
-          <button className="absolute top-3 right-3 md:hidden w-10 h-10 rounded-full bg-black/40 text-white flex items-center justify-center" onClick={onClose} aria-label="닫기"><Icon name="x" /></button>
+          {full
+            ? <button className="absolute top-3 right-3 w-10 h-10 rounded-full bg-white/20 text-white flex items-center justify-center hover:bg-white/30" onClick={() => setFull(false)} aria-label="전체 화면 끝내기"><Icon name="x" /></button>
+            : <button className="absolute top-3 right-3 md:hidden w-10 h-10 rounded-full bg-black/40 text-white flex items-center justify-center" onClick={onClose} aria-label="닫기"><Icon name="x" /></button>}
+          {m && !full && (
+            <button className="absolute bottom-3 right-3 w-10 h-10 rounded-full bg-black/40 text-white flex items-center justify-center hover:bg-black/60" onClick={() => setFull(true)} aria-label="사진만 전체 화면으로 보기" title="전체 화면">
+              <Icon name="expand" />
+            </button>
+          )}
           {slides.length > 1 && <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/45 text-white text-xs px-3 py-1">{pos + 1} / {slides.length}</span>}
         </div>
-        <div className="md:w-[380px] shrink-0 flex flex-col min-h-0 flex-1 md:flex-none">
+        <div className={cx('md:w-[380px] shrink-0 flex-col min-h-0 flex-1 md:flex-none', full ? 'hidden' : 'flex')}>
           <div className="flex-1 overflow-y-auto p-5 md:p-6">
             <div className="flex items-start justify-between gap-3">
               <div>
