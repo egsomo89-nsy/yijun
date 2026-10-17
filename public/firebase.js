@@ -139,7 +139,7 @@ const removeUser = (uid) => deleteDoc(doc(db, "users", uid));
 // ─────────────────────────────────────────────────────────────────────────────
 // 5) 성장 기록 (records 컬렉션)
 //    문서 구조: { date:'YYYY-MM-DD', title, memo, category, milestone, tags[],
-//                 media:[{url,type,path}], visibility, authorUid, authorName, createdAt }
+//                 media:[{url,type,path,view?,viewPath?}], visibility, authorUid, authorName, createdAt }
 // ─────────────────────────────────────────────────────────────────────────────
 /** 조회: onSnapshot 으로 실시간 동기화 */
 const watchRecords = (cb, onError) =>
@@ -157,19 +157,54 @@ const updateRecord = (id, data) => updateDoc(doc(db, "records", id), data);
 /** 삭제: 문서를 지운 뒤 Storage 에 올린 파일도 함께 정리 */
 async function deleteRecord(record) {
   await deleteDoc(doc(db, "records", record.id));
-  await deleteMedia((record.media || []).map((m) => m.path));
+  await deleteMedia((record.media || []).flatMap((m) => [m.path, m.viewPath]));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 6) 사진 · 영상 업로드 (Storage)
 // ─────────────────────────────────────────────────────────────────────────────
-/** 파일 업로드: uploadBytes → getDownloadURL */
+// 파일 이름이 매번 달라 내용이 바뀌지 않으므로, 브라우저가 오래 캐시해 두도록 합니다.
+const CACHE_CONTROL = "public, max-age=31536000, immutable";
+const VIEW_MAX = 2048;
+
+/** 화면 표시용 사본: 긴 변 2048px JPEG 로 줄임 (줄일 수 없거나 더 작아지지 않으면 null) */
+async function makeViewCopy(file) {
+  if (!file.type.startsWith("image/") || file.type === "image/gif") return null;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, VIEW_MAX / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+    return blob && blob.size < file.size * 0.8 ? blob : null;
+  } catch (e) {
+    return null; // 브라우저가 읽지 못하는 형식이면 원본만 올림
+  }
+}
+
+/** 파일 업로드: 원본 + (사진이면) 화면 표시용 사본 → 다운로드 URL */
 async function uploadMedia(file, uid) {
   const safeName = file.name.replace(/[^\w.\-]+/g, "_").slice(-60);
   const path = `records/${uid}/${Date.now()}_${safeName}`;
-  const snapshot = await uploadBytes(ref(storage, path), file, { contentType: file.type });
+  const snapshot = await uploadBytes(ref(storage, path), file, { contentType: file.type, cacheControl: CACHE_CONTROL });
   const url = await getDownloadURL(snapshot.ref);
-  return { url, path, type: file.type.startsWith("video/") ? "video" : "image" };
+  const media = { url, path, type: file.type.startsWith("video/") ? "video" : "image" };
+
+  const view = await makeViewCopy(file);
+  if (view) {
+    try {
+      const viewPath = `${path}.view.jpg`;
+      const viewSnap = await uploadBytes(ref(storage, viewPath), view, { contentType: "image/jpeg", cacheControl: CACHE_CONTROL });
+      media.view = await getDownloadURL(viewSnap.ref);
+      media.viewPath = viewPath;
+    } catch (e) {
+      // 사본 업로드에 실패해도 원본으로 보여 줌
+    }
+  }
+  return media;
 }
 
 /** Storage 파일 삭제 (실패해도 앱 흐름은 막지 않음) */

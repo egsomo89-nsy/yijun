@@ -389,6 +389,9 @@ function SectionTitle({ children, right }) {
   );
 }
 
+/** 화면에 보여 줄 사진 주소: 가벼운 표시용 사본이 있으면 그것, 없으면(예전 사진 · URL) 원본 */
+const viewSrc = (m) => (m && (m.view || m.url)) || '';
+
 /** 사진/영상 썸네일. 미디어가 없으면 카테고리 색의 자리 표시 */
 function MediaThumb({ record, media, className }) {
   const cat = catOf(record.category);
@@ -409,7 +412,7 @@ function MediaThumb({ record, media, className }) {
       </div>
     );
   }
-  return <img src={media.url} alt={record.title || '사진'} loading="lazy" className={cx('object-cover bg-peach-50', className)} />;
+  return <img src={viewSrc(media)} alt={record.title || '사진'} loading="lazy" decoding="async" className={cx('object-cover bg-peach-50', className)} />;
 }
 
 /** 기록 카드 */
@@ -446,7 +449,7 @@ function RecordCard({ record, onOpen, highlight }) {
   );
 }
 
-/** 상세 보기 모달: PC 는 사진 + 옆 정보 패널, 모바일은 위아래 배치. ← → 키로 넘기기.
+/** 상세 보기 모달: PC 는 사진 + 옆 정보 패널, 모바일은 위아래 배치. ← → 키 · 좌우로 밀어서 넘기기.
  *  사진을 누르면 정보 패널 없이 사진만 화면 가득 보고, 다시 누르거나 Esc 로 돌아옵니다. */
 function Lightbox({ list, start, viewer, onClose, onEdit, onDelete }) {
   // 선택한 기록 하나의 사진 · 영상만 넘겨 봅니다 (다른 기록으로는 넘어가지 않음)
@@ -472,21 +475,50 @@ function Lightbox({ list, start, viewer, onClose, onEdit, onDelete }) {
     return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = ''; };
   });
   useEffect(() => { if (!slide) onClose(); }, [slide]);
+
+  // 앞뒤 사진을 미리 받아 두어 넘길 때 바로 보이게 함
+  useEffect(() => {
+    [pos + 1, pos - 1, pos + 2].forEach((i) => {
+      const s = slides[i];
+      if (s && s.m && s.m.type !== 'video') { const img = new Image(); img.decoding = 'async'; img.src = viewSrc(s.m); }
+    });
+  }, [pos, slides]);
+
+  // 사진 영역을 좌우로 밀어서 넘기기 (민 경우에는 '크게 보기' 탭으로 처리하지 않음)
+  const touch = useRef(null);
+  const swiped = useRef(false);
+  const onTouchStart = (e) => { const t = e.touches[0]; touch.current = { x: t.clientX, y: t.clientY }; swiped.current = false; };
+  const onTouchEnd = (e) => {
+    if (!touch.current) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touch.current.x;
+    const dy = t.clientY - touch.current.y;
+    touch.current = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) { swiped.current = true; go(dx < 0 ? 1 : -1); }
+  };
+
+  const [loaded, setLoaded] = useState('');   // 다 받아진 사진 주소 (아직이면 로딩 표시)
   if (!slide) return null;
 
   const { r, m } = slide;
+  const src = viewSrc(m);
   const cat = catOf(r.category);
   const milestone = MILESTONES.find((x) => x.id === r.milestone);
   const navBtn = 'absolute top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/85 text-ink flex items-center justify-center shadow-card hover:bg-white disabled:opacity-0';
   return (
     <div className={cx('fixed inset-0 z-50 flex items-stretch justify-center', full ? 'bg-black' : 'bg-stone-900/80 backdrop-blur-sm md:items-center md:p-8')} onClick={onClose} role="dialog" aria-modal="true">
       <div className={cx('w-full overflow-hidden flex', full ? 'bg-black' : 'bg-white md:max-w-6xl md:h-[86vh] md:rounded-3xl flex-col md:flex-row shadow-2xl')} onClick={(e) => e.stopPropagation()}>
-        <div className={cx('relative flex items-center justify-center', full ? 'bg-black flex-1 min-w-0' : 'bg-stone-900 h-[46vh] md:h-auto md:flex-1 shrink-0')}>
+        <div className={cx('relative flex items-center justify-center', full ? 'bg-black flex-1 min-w-0' : 'bg-stone-900 h-[46vh] md:h-auto md:flex-1 shrink-0')}
+          onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
           {!m && <MediaThumb record={r} media={null} className="w-full h-full" />}
           {m && m.type === 'video' && <video key={m.url} src={m.url} controls playsInline className="max-w-full max-h-full" />}
           {m && m.type !== 'video' && (
-            <img src={m.url} alt={r.title || '사진'} onClick={() => setFull(!full)} title={full ? '원래 화면으로' : '사진만 크게 보기'}
+            <img key={src} src={src} alt={r.title || '사진'} decoding="async" onLoad={() => setLoaded(src)}
+              onClick={() => { if (swiped.current) { swiped.current = false; return; } setFull(!full); }} title={full ? '원래 화면으로' : '사진만 크게 보기'}
               className={cx('object-contain', full ? 'w-full h-full cursor-zoom-out' : 'max-w-full max-h-full cursor-zoom-in')} />
+          )}
+          {m && m.type !== 'video' && loaded !== src && (
+            <span className="absolute w-8 h-8 rounded-full border-[3px] border-white/30 border-t-white animate-spin pointer-events-none" aria-label="사진 불러오는 중" />
           )}
           <button className={cx(navBtn, 'left-3')} onClick={() => go(-1)} disabled={pos === 0} aria-label="이전"><Icon name="left" /></button>
           <button className={cx(navBtn, 'right-3')} onClick={() => go(1)} disabled={pos === slides.length - 1} aria-label="다음"><Icon name="right" /></button>
@@ -802,8 +834,8 @@ function RecordForm({ initial, me, backend, allTags, onDone, onCancel, toast }) 
         total += data.length;
         images.push({ mimeType: 'image/jpeg', data });
       }
-      // 이미 저장된 사진은 주소만 보내고 서버가 내려받음
-      const urls = media.filter((m) => m.type !== 'video' && m.url.startsWith('https://firebasestorage.googleapis.com/')).map((m) => m.url).slice(0, MAX - images.length);
+      // 이미 저장된 사진은 주소만 보내고 서버가 내려받음 (가벼운 표시용 사본 우선)
+      const urls = media.filter((m) => m.type !== 'video' && m.url.startsWith('https://firebasestorage.googleapis.com/')).map(viewSrc).slice(0, MAX - images.length);
       if (!images.length && !urls.length) { toast('자동 채우기에 쓸 수 있는 사진을 찾지 못했어요. 사진 파일을 추가해 주세요.'); return; }
 
       const milestoneInfo = MILESTONES.find((m) => m.id === milestone);
@@ -880,8 +912,8 @@ function RecordForm({ initial, me, backend, allTags, onDone, onCancel, toast }) 
       const data = { date, title: title.trim(), memo: memo.trim(), category, milestone, tags, visibility, media: [...media, ...uploaded] };
       if (editing) {
         await backend.updateRecord(initial.id, { ...data, updatedAt: Date.now() });
-        const kept = new Set(media.map((m) => m.path));
-        backend.deleteMedia((initial.media || []).map((m) => m.path).filter((p) => p && !kept.has(p)));
+        const kept = new Set(media.flatMap((m) => [m.path, m.viewPath]));
+        backend.deleteMedia((initial.media || []).flatMap((m) => [m.path, m.viewPath]).filter((p) => p && !kept.has(p)));
       } else {
         await backend.addRecord({ ...data, authorUid: me.uid, authorName: me.relation || me.displayName, createdAt: Date.now() });
       }
